@@ -129,6 +129,40 @@ The AI uses targeted edits (preserving your manual changes) or full replacement 
 | **1:1** | Instagram feed | **slow** | Leisurely, atmospheric, 20-40 frame animations |
 | **4:5** | Instagram portrait | | |
 
+## Models & Providers
+
+Supports OpenAI, Anthropic (Claude), and DeepSeek. Switch models from the homepage dropdown or via environment variables.
+
+### Claude (Anthropic)
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### DeepSeek
+
+DeepSeek uses the Anthropic-compatible API:
+
+```bash
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_API_KEY=sk-your-deepseek-key
+# Select "DeepSeek V4 Pro" in the model dropdown
+```
+
+### Custom API Proxy
+
+Point to any Anthropic-compatible or OpenAI-compatible endpoint:
+
+```bash
+# Anthropic-compatible proxy (ark, bella, etc.)
+ANTHROPIC_BASE_URL=https://your-proxy.com/api
+ANTHROPIC_AUTH_TOKEN=sk-your-token
+
+# OpenAI-compatible proxy
+OPENAI_BASE_URL=https://your-proxy.com/v1
+OPENAI_API_KEY=sk-your-key
+```
+
 ## How Style Constraints Work
 
 The style wizard produces a structured guidance block that is injected into the AI system prompt:
@@ -160,7 +194,14 @@ This replaces the AI's default behavior of guessing aesthetics from the prompt, 
 ## Environment Variables
 
 ```bash
-OPENAI_API_KEY=sk-...      # Required: OpenAI API key
+# At least one provider key required
+OPENAI_API_KEY=sk-...              # OpenAI
+ANTHROPIC_API_KEY=sk-ant-...       # Anthropic / Claude
+# ANTHROPIC_AUTH_TOKEN=sk-...       # Alt: proxy auth token
+
+# Custom endpoints (optional)
+# OPENAI_BASE_URL=https://api.openai.com/v1
+# ANTHROPIC_BASE_URL=https://api.anthropic.com
 ```
 
 Optional — for Lambda rendering (video export):

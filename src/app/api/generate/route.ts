@@ -5,9 +5,56 @@ import {
   type SkillName,
 } from "@/skills";
 import { buildStylePrompt, decodeStyleConfig } from "@/styles";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateObject, streamText } from "ai";
+import { generateObject, streamText, type LanguageModelV2 } from "ai";
 import { z } from "zod";
+
+function parseModel(model: string): {
+  provider: "openai" | "anthropic";
+  modelName: string;
+  reasoningEffort: string;
+} {
+  const [modelName, reasoningEffort = "none"] = model.split(":");
+  const provider =
+    modelName.startsWith("claude") || modelName.startsWith("deepseek")
+      ? "anthropic"
+      : "openai";
+  return { provider, modelName, reasoningEffort };
+}
+
+function getProviderModel(
+  modelStr: string,
+  openaiClient: ReturnType<typeof createOpenAI>,
+  anthropicClient: ReturnType<typeof createAnthropic>,
+): LanguageModelV2 {
+  const { provider, modelName } = parseModel(modelStr);
+  if (provider === "anthropic") {
+    return anthropicClient(modelName) as LanguageModelV2;
+  }
+  return openaiClient(modelName) as LanguageModelV2;
+}
+
+function getReasoningOptions(
+  modelStr: string,
+): Record<string, unknown> | null {
+  const { provider, reasoningEffort } = parseModel(modelStr);
+  if (reasoningEffort === "none") return null;
+
+  if (provider === "anthropic") {
+    const budget =
+      reasoningEffort === "low" ? 4000 : reasoningEffort === "medium" ? 8000 : 16000;
+    return {
+      anthropic: {
+        thinking: { type: "enabled" as const, budgetTokens: budget },
+      },
+    };
+  }
+
+  return {
+    openai: { reasoningEffort },
+  };
+}
 
 const VALIDATION_PROMPT = `You are a prompt classifier for a motion graphics generation tool.
 
@@ -311,31 +358,56 @@ export async function POST(req: Request) {
     styleConfig: encodedStyleConfig,
   }: GenerateRequest = await req.json();
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const { provider } = parseModel(model);
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+  const anthropicApiKey =
+    process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
+  const hasCustomBase = !!(
+    process.env.ANTHROPIC_BASE_URL || process.env.OPENAI_BASE_URL
+  );
 
-  if (!apiKey) {
+  if (provider === "anthropic" && !anthropicApiKey && !hasCustomBase) {
+    return new Response(
+      JSON.stringify({
+        error:
+          'The environment variable "ANTHROPIC_API_KEY" or "ANTHROPIC_AUTH_TOKEN" is not set. Add it to your .env file and try again.',
+      }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  if (provider === "openai" && !openaiApiKey && !hasCustomBase) {
     return new Response(
       JSON.stringify({
         error:
           'The environment variable "OPENAI_API_KEY" is not set. Add it to your .env file and try again.',
       }),
-      {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      },
+      { status: 400, headers: { "Content-Type": "application/json" } },
     );
   }
 
-  // Parse model ID - format can be "model-name" or "model-name:reasoning_effort"
-  const [modelName, reasoningEffort] = model.split(":");
+  const openaiBaseURL = process.env.OPENAI_BASE_URL || undefined;
+  const anthropicBaseURL = process.env.ANTHROPIC_BASE_URL || undefined;
 
-  const openai = createOpenAI({ apiKey });
+  const openai = createOpenAI({
+    apiKey: openaiApiKey ?? "",
+    ...(openaiBaseURL && { baseURL: openaiBaseURL }),
+  });
+
+  const anthropic = createAnthropic({
+    apiKey: anthropicApiKey ?? "",
+    ...(anthropicBaseURL && { baseURL: anthropicBaseURL }),
+  });
 
   // Validate the prompt first (skip for follow-ups with existing code)
   if (!isFollowUp) {
     try {
+      const validationModel =
+        provider === "anthropic"
+          ? (anthropic("claude-haiku-4-5") as LanguageModelV2)
+          : openai("gpt-5.2");
       const validationResult = await generateObject({
-        model: openai("gpt-5.2"),
+        model: validationModel,
         system: VALIDATION_PROMPT,
         prompt: `User prompt: "${prompt}"`,
         schema: z.object({ valid: z.boolean() }),
@@ -360,8 +432,12 @@ export async function POST(req: Request) {
   // Detect which skills apply to this prompt
   let detectedSkills: SkillName[] = [];
   try {
+    const skillDetectionModel =
+      provider === "anthropic"
+        ? (anthropic("claude-haiku-4-5") as LanguageModelV2)
+        : openai("gpt-5.2");
     const skillResult = await generateObject({
-      model: openai("gpt-5.2"),
+      model: skillDetectionModel,
       system: SKILL_DETECTION_PROMPT,
       prompt: `User prompt: "${prompt}"`,
       schema: z.object({
@@ -531,8 +607,9 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
         ? `${FOLLOW_UP_SYSTEM_PROMPT}\n\n${styleGuidance}`
         : FOLLOW_UP_SYSTEM_PROMPT;
 
+      const editModel = getProviderModel(model, openai, anthropic);
       const editResult = await generateObject({
-        model: openai(modelName),
+        model: editModel,
         system: followUpSystemPrompt,
         messages: editMessages,
         schema: FollowUpResponseSchema,
@@ -634,27 +711,27 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
       },
     ];
 
+    const genModel = getProviderModel(model, openai, anthropic);
+    const reasoningOptions = getReasoningOptions(model);
+
     const result = streamText({
-      model: openai(modelName),
+      model: genModel,
       system: enhancedSystemPrompt,
       messages: initialMessages,
-      ...(reasoningEffort && {
-        providerOptions: {
-          openai: {
-            reasoningEffort: reasoningEffort,
-          },
-        },
-      }),
+      ...(reasoningOptions && { providerOptions: reasoningOptions }),
     });
 
+    const { modelName, reasoningEffort } = parseModel(model);
     console.log(
       "Generating React component with prompt:",
       prompt,
       "model:",
       modelName,
+      "provider:",
+      provider,
       "skills:",
       detectedSkills.length > 0 ? detectedSkills.join(", ") : "general",
-      reasoningEffort ? `reasoning_effort: ${reasoningEffort}` : "",
+      reasoningEffort !== "none" ? `reasoning: ${reasoningEffort}` : "",
       hasImages ? `(with ${frameImages.length} image(s))` : "",
     );
 
@@ -700,7 +777,7 @@ Analyze the request and decide: use targeted edits (type: "edit") for small chan
     console.error("Error generating code:", error);
     return new Response(
       JSON.stringify({
-        error: "Something went wrong while trying to reach OpenAI APIs.",
+        error: "Something went wrong while trying to reach the AI APIs.",
       }),
       { status: 500, headers: { "Content-Type": "application/json" } },
     );
