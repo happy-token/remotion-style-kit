@@ -1,0 +1,26 @@
+{
+  "name": "create-remotion-style-kit",
+  "version": "1.0.0",
+  "description": "Scaffold a Remotion Style Kit project — AI-powered motion graphics with 12 visual styles",
+  "type": "module",
+  "bin": {
+    "create-remotion-style-kit": "./index.js"
+  },
+  "files": [
+    "index.js"
+  ],
+  "repository": {
+    "url": "https://github.com/happy-token/remotion-style-kit"
+  },
+  "keywords": [
+    "remotion",
+    "video",
+    "animation",
+    "motion-graphics",
+    "ai",
+    "openai",
+    "nextjs",
+    "template"
+  ],
+  "license": "MIT"
+}
